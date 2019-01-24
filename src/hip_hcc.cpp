@@ -2160,10 +2160,11 @@ void ihipStream_t::locked_copy2DSync(void* dst, const void* src, size_t width, s
                 sizeBytes, hcMemcpyStr(hcCopyDir), forceUnpinnedCopy);
         printPointerInfo(DB_COPY, "  dst", dst, dstPtrInfo);
         printPointerInfo(DB_COPY, "  src", src, srcPtrInfo);
-
+        int error = 0 ;
         crit->_av.copy2d_ext(src, dst, width, height, srcPitch, dstPitch, hcCopyDir, srcPtrInfo, dstPtrInfo,
                            copyDevice ? &copyDevice->getDevice()->_acc : nullptr,
-                           forceUnpinnedCopy);
+                           forceUnpinnedCopy , &error);
+        printf("crit->_av.copy2d_ext return error=%d\n",error);
     }
 }
 
@@ -2367,6 +2368,7 @@ void ihipStream_t::locked_copy2DAsync(void* dst, const void* src, size_t width, 
     tprintf(DB_COPY, "  copyDev:%d   dir=%s forceUnpinnedCopy=%d\n",
             copyDevice ? copyDevice->getDeviceNum() : -1, hcMemcpyStr(hcCopyDir),
                forceUnpinnedCopy);
+    int error = 0;
     if (dstTracked && srcTracked && !forceUnpinnedCopy &&
         copyDevice /*code below assumes this is !nullptr*/) {
         LockedAccessor_StreamCrit_t crit(_criticalData);
@@ -2375,11 +2377,13 @@ void ihipStream_t::locked_copy2DAsync(void* dst, const void* src, size_t width, 
              if (HIP_FORCE_SYNC_COPY) {
                  crit->_av.copy2d_ext(src, dst, width, height, srcPitch, dstPitch, hcCopyDir, srcPtrInfo, dstPtrInfo,
                            &copyDevice->getDevice()->_acc,
-                           forceUnpinnedCopy);
+                           forceUnpinnedCopy , &error);
+                 printf("crit->_av.copy2d_ext return error=%d\n",error);
 
              } else {
                  crit->_av.copy2d_async_ext(src, dst, width, height, srcPitch, dstPitch, hcCopyDir, srcPtrInfo, dstPtrInfo,
-                                          &copyDevice->getDevice()->_acc);
+                                          &copyDevice->getDevice()->_acc, &error);
+                 printf("locked_copy2DAsync- received error =%d\n",error);
              }
          } catch (Kalmar::runtime_exception) {
                 throw ihipException(hipErrorRuntimeOther);
@@ -2396,7 +2400,8 @@ void ihipStream_t::locked_copy2DAsync(void* dst, const void* src, size_t width, 
          LockedAccessor_StreamCrit_t crit(_criticalData);
          crit->_av.copy2d_ext(src, dst, width, height, srcPitch, dstPitch, hcCopyDir, srcPtrInfo, dstPtrInfo,
                            copyDevice ? &copyDevice->getDevice()->_acc : nullptr,
-                           forceUnpinnedCopy);
+                           forceUnpinnedCopy, &error);
+         printf("crit->_av.copy2d_ext return error=%d\n",error);
     } 
 }
 
