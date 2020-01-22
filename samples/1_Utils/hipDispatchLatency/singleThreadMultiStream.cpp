@@ -120,7 +120,7 @@ void launchKernelDispatchTest(hipStream_t inStream, int id=0){
     //Timing directly the dispatch
 #ifdef __HIP_PLATFORM_HCC__
     for (auto i = 0; i < TOTAL_RUN_COUNT; ++i) {
-        hipEventRecord(start);
+        hipEventRecord(start, stream);
         hipExtLaunchKernelGGL((EmptyKernel), dim3(NUM_GROUPS), dim3(GROUP_SIZE), 0, stream, start, stop, 0);
         hipEventSynchronize(stop);
         hipEventElapsedTime(&results[i], start, stop);
@@ -129,9 +129,9 @@ void launchKernelDispatchTest(hipStream_t inStream, int id=0){
 #endif
     //Timing around the dispatch
     for (auto i = 0; i < TOTAL_RUN_COUNT; ++i) {
-        hipEventRecord(start, 0);
+        hipEventRecord(start, stream);
         hipLaunchKernelGGL((EmptyKernel), dim3(NUM_GROUPS), dim3(GROUP_SIZE), 0, stream);
-        hipEventRecord(stop, 0);
+        hipEventRecord(stop, stream);
         hipEventSynchronize(stop);
         hipEventElapsedTime(&results[i], start, stop);
     }
@@ -143,11 +143,11 @@ void launchKernelDispatchTest(hipStream_t inStream, int id=0){
     /*********************************************************************************/
 
     for (auto i = 0; i < TOTAL_RUN_COUNT; ++i) {
-         hipEventRecord(start);
+         hipEventRecord(start, stream);
          for (int i = 0; i < BATCH_SIZE; i++) {
              hipLaunchKernelGGL((EmptyKernel), dim3(NUM_GROUPS), dim3(GROUP_SIZE), 0, stream);
          }
-         hipEventRecord(stop, 0);
+         hipEventRecord(stop, stream);
          hipEventSynchronize(stop);
          hipEventElapsedTime(&results[i], start, stop);
     }

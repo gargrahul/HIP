@@ -89,9 +89,9 @@ void *testEmptyKernelLaunchInStream(void *tid)
 
     //Timing around the dispatch
     for (auto i = 0; i < TOTAL_RUN_COUNT; ++i) {
-        hipEventRecord(start, 0);
+        hipEventRecord(start, stream);
         hipLaunchKernelGGL((EmptyKernel), dim3(NUM_GROUPS), dim3(GROUP_SIZE), 0, stream);
-        hipEventRecord(stop, 0);
+        hipEventRecord(stop, stream);
         hipEventSynchronize(stop);
         hipEventElapsedTime(&results[i], start, stop);
     }
