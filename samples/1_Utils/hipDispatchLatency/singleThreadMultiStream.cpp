@@ -24,16 +24,7 @@ THE SOFTWARE.
 #include <iostream>
 #include <time.h>
 #include <chrono>
-
-#define check(cmd)                                                                                 \
-    {                                                                                              \
-        hipError_t status = cmd;                                                                   \
-        if (status != hipSuccess) {                                                                \
-            printf("error: '%s'(%d) from %s at %s:%d\n", hipGetErrorString(status), status, #cmd,  \
-                   __FILE__, __LINE__);                                                            \
-            abort();                                                                               \
-        }                                                                                          \
-    }
+#include <algorithm>
 
 #define LEN 1024 * 1024
 
@@ -79,16 +70,10 @@ void launchKernelDispatchTest(hipStream_t inStream, int id=0){
     hipEventCreate(&start);
     hipEventCreate(&stop);
     hipStream_t stream = inStream;
-#if 0
-    hipDevice_t device;
-    hipDeviceGet(&device, 0);
-
-    hipCtx_t context;     
-    hipCtxCreate(&context, 0, device); 
     hipModule_t module;
     hipFunction_t function;
-    check(hipModuleLoad(&module, FILE_NAME));
-    check(hipModuleGetFunction(&function, module, KERNEL_NAME));
+    hipModuleLoad(&module, FILE_NAME);
+    hipModuleGetFunction(&function, module, KERNEL_NAME);
     void* kernel_params = nullptr;
     
     /************************************************************************************/
@@ -103,7 +88,7 @@ void launchKernelDispatchTest(hipStream_t inStream, int id=0){
         results[i] = std::chrono::duration<double, std::milli>(stop - start).count();
     }
     print_timing("hipModuleLaunchKernel enqueue rate stream-"  + std::to_string(id), results);
-#endif
+
     // Timing hipLaunchKernelGGL
     for (auto i = 0; i < TOTAL_RUN_COUNT; ++i) {
         auto start = std::chrono::high_resolution_clock::now();
@@ -143,29 +128,35 @@ void launchKernelDispatchTest(hipStream_t inStream, int id=0){
     /*********************************************************************************/
 
     for (auto i = 0; i < TOTAL_RUN_COUNT; ++i) {
-         hipEventRecord(start, stream);
-         for (int i = 0; i < BATCH_SIZE; i++) {
-             hipLaunchKernelGGL((EmptyKernel), dim3(NUM_GROUPS), dim3(GROUP_SIZE), 0, stream);
-         }
-         hipEventRecord(stop, stream);
-         hipEventSynchronize(stop);
-         hipEventElapsedTime(&results[i], start, stop);
+        hipEventRecord(start, stream);
+        for (int j = 0; j < BATCH_SIZE; j++) {
+            hipLaunchKernelGGL((EmptyKernel), dim3(NUM_GROUPS), dim3(GROUP_SIZE), 0, stream);
+        }
+        hipEventRecord(stop, stream);
+        hipEventSynchronize(stop);
+        hipEventElapsedTime(&results[i], start, stop);
     }
     print_timing("Batch dispatch latency stream-"+ std::to_string(id), results, BATCH_SIZE);
 
-    check(hipEventDestroy(start));
-    check(hipEventDestroy(stop));
-    //check(hipCtxDestroy(context));
+    hipEventDestroy(start);
+    hipEventDestroy(stop);
+    hipModuleUnload(module);
 }
 
 int main(){
+    hipDevice_t device;
+    hipDeviceGet(&device, 0);
+
+    hipCtx_t context;
+    hipCtxCreate(&context, 0, device);
     const int num_streams = 4;
-    hipStream_t stream[num_streams];
+    hipStream_t stream;
     launchKernelDispatchTest(0);
     for (int i = 0; i < num_streams; ++i) {
-        check(hipStreamCreate(&stream[i]));
-        launchKernelDispatchTest(stream[i],i);
-        check(hipStreamDestroy(stream[i]));
+        hipStreamCreate(&stream);
+        launchKernelDispatchTest(stream,i+1);
+        hipStreamDestroy(stream);
     }
+    hipCtxDestroy(context);
     return 0;    
 }
