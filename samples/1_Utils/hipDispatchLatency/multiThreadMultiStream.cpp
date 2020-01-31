@@ -20,25 +20,23 @@ THE SOFTWARE.
 #include <pthread.h>
 #include <stdio.h>
 #include "hip/hip_runtime.h"
+#ifdef __HIP_PLATFORM_HCC__
+#include "hip/hip_ext.h"
+#endif
 #include <iostream>
 #include <chrono>
+#include <algorithm>
 
-#define check(cmd)                                                                             \
-{                                                                                              \
-    hipError_t status = cmd;                                                                   \
-    if (status != hipSuccess) {                                                                \
-        printf("error: '%s'(%d) from %s at %s:%d\n", hipGetErrorString(status), status, #cmd,  \
-               __FILE__, __LINE__);                                                            \
-        abort();                                                                               \
-    }                                                                                          \
-}
-
+#define NUM_THREADS 2
 #define NUM_GROUPS 1
 #define GROUP_SIZE 1
 #define WARMUP_RUN_COUNT 10
 #define TIMING_RUN_COUNT 100
 #define TOTAL_RUN_COUNT WARMUP_RUN_COUNT + TIMING_RUN_COUNT
 #define BATCH_SIZE 1000
+
+#define FILE_NAME "test_kernel.code"
+#define KERNEL_NAME "test"
 
 __global__ void EmptyKernel() { }
 
@@ -76,7 +74,25 @@ void *testEmptyKernelLaunchInStream(void *tid)
     hipEventCreate(&start);
     hipEventCreate(&stop);
     hipStream_t stream;
-    check(hipStreamCreate(&stream));
+    hipStreamCreate(&stream);
+    hipModule_t module;
+    hipFunction_t function;
+    hipModuleLoad(&module, FILE_NAME);
+    hipModuleGetFunction(&function, module, KERNEL_NAME);
+    void* kernel_params = nullptr;
+
+    /************************************************************************************/
+    /* HIP kernel launch enqueue rate:                                                  */
+    /* Measure time taken to enqueue a kernel on the GPU                                */
+    /************************************************************************************/
+    // Timing hipModuleLaunchKernel
+    for (auto i = 0; i < TOTAL_RUN_COUNT; ++i) {
+        auto start = std::chrono::high_resolution_clock::now();
+        hipModuleLaunchKernel(function, 1, 1, 1, 1, 1, 1, 0, stream, &kernel_params, nullptr);
+        auto stop = std::chrono::high_resolution_clock::now();
+        results[i] = std::chrono::duration<double, std::milli>(stop - start).count();
+    }
+    print_timing("hipModuleLaunchKernel enqueue rate Non-Null Stream Thread-"+ std::to_string(*threadId), results);
 
     // Timing hipLaunchKernelGGL
     for (auto i = 0; i < TOTAL_RUN_COUNT; ++i) {
@@ -85,7 +101,22 @@ void *testEmptyKernelLaunchInStream(void *tid)
         auto stop = std::chrono::high_resolution_clock::now();
         results[i] = std::chrono::duration<double, std::milli>(stop - start).count();
     }
-    print_timing("hipLaunchKernelGGL enqueue rate Non-Null stream Thread-"+ std::to_string(*threadId), results);
+    print_timing("hipLaunchKernelGGL enqueue rate Non-Null Stream Thread-"+ std::to_string(*threadId), results);
+
+    /***********************************************************************************/
+    /* Single dispatch execution latency using HIP events:                             */
+    /* Measures time to start & finish executing a kernel with GPU-scope visibility    */
+    /***********************************************************************************/
+    //Timing directly the dispatch
+#ifdef __HIP_PLATFORM_HCC__
+    for (auto i = 0; i < TOTAL_RUN_COUNT; ++i) {
+        hipEventRecord(start, stream);
+        hipExtLaunchKernelGGL((EmptyKernel), dim3(NUM_GROUPS), dim3(GROUP_SIZE), 0, stream, start, stop, 0);
+        hipEventSynchronize(stop);
+        hipEventElapsedTime(&results[i], start, stop);
+    }
+    print_timing("Timing directly single dispatch latency Non-Null Stream Thread-" + std::to_string(*threadId), results);
+#endif
 
     //Timing around the dispatch
     for (auto i = 0; i < TOTAL_RUN_COUNT; ++i) {
@@ -96,9 +127,27 @@ void *testEmptyKernelLaunchInStream(void *tid)
         hipEventElapsedTime(&results[i], start, stop);
     }
     print_timing("Timing around single dispatch latency Non-Null Stream Thread- " + std::to_string(*threadId), results);
-    check(hipEventDestroy(start));
-    check(hipEventDestroy(stop));
-    check(hipStreamDestroy(stream));
+
+    /*********************************************************************************/
+    /* Batch dispatch execution latency using HIP events:                            */
+    /* Measures average time to start & finish executing each dispatch in a batch    */ 
+    /*********************************************************************************/
+
+    for (auto i = 0; i < TOTAL_RUN_COUNT; ++i) {
+        hipEventRecord(start, stream);
+        for (int j = 0; j < BATCH_SIZE; j++) {
+            hipLaunchKernelGGL((EmptyKernel), dim3(NUM_GROUPS), dim3(GROUP_SIZE), 0, stream);
+        }
+        hipEventRecord(stop, stream);
+        hipEventSynchronize(stop);
+        hipEventElapsedTime(&results[i], start, stop);
+    }
+    print_timing("Batch dispatch latency Non-Null Stream Thread-"+ std::to_string(*threadId), results, BATCH_SIZE);
+
+    hipEventDestroy(start);
+    hipEventDestroy(stop);
+    hipModuleUnload(module);
+    hipStreamDestroy(stream);
     return NULL;
 }
 
@@ -109,6 +158,24 @@ void *testEmptyKernelLaunchInNullStream(void *tid)
     hipEvent_t start, stop;
     hipEventCreate(&start);
     hipEventCreate(&stop);
+    hipModule_t module;
+    hipFunction_t function;
+    hipModuleLoad(&module, FILE_NAME);
+    hipModuleGetFunction(&function, module, KERNEL_NAME);
+    void* kernel_params = nullptr;
+
+    /************************************************************************************/
+    /* HIP kernel launch enqueue rate:                                                  */
+    /* Measure time taken to enqueue a kernel on the GPU                                */
+    /************************************************************************************/ 
+    // Timing hipModuleLaunchKernel
+    for (auto i = 0; i < TOTAL_RUN_COUNT; ++i) {
+        auto start = std::chrono::high_resolution_clock::now();
+        hipModuleLaunchKernel(function, 1, 1, 1, 1, 1, 1, 0, 0, &kernel_params, nullptr);
+        auto stop = std::chrono::high_resolution_clock::now();
+        results[i] = std::chrono::duration<double, std::milli>(stop - start).count();
+    }
+    print_timing("hipModuleLaunchKernel enqueue rate Null Stream Thread-"+ std::to_string(*threadId), results);
 
     // Timing hipLaunchKernelGGL
     for (auto i = 0; i < TOTAL_RUN_COUNT; ++i) {
@@ -117,7 +184,22 @@ void *testEmptyKernelLaunchInNullStream(void *tid)
         auto stop = std::chrono::high_resolution_clock::now();
         results[i] = std::chrono::duration<double, std::milli>(stop - start).count();
     }
-    print_timing("hipLaunchKernelGGL enqueue rate Null stream Thread-"+ std::to_string(*threadId), results);
+    print_timing("hipLaunchKernelGGL enqueue rate Null Stream Thread-"+ std::to_string(*threadId), results);
+
+    /***********************************************************************************/
+    /* Single dispatch execution latency using HIP events:                             */   
+    /* Measures time to start & finish executing a kernel with GPU-scope visibility    */ 
+    /***********************************************************************************/
+    //Timing directly the dispatch
+#ifdef __HIP_PLATFORM_HCC__
+    for (auto i = 0; i < TOTAL_RUN_COUNT; ++i) {
+        hipEventRecord(start, 0);
+        hipExtLaunchKernelGGL((EmptyKernel), dim3(NUM_GROUPS), dim3(GROUP_SIZE), 0, 0, start, stop, 0);
+        hipEventSynchronize(stop);
+        hipEventElapsedTime(&results[i], start, stop);
+    }
+    print_timing("Timing directly single dispatch latency Null Stream Thread-" + std::to_string(*threadId), results);
+#endif
 
     //Timing around the dispatch
     for (auto i = 0; i < TOTAL_RUN_COUNT; ++i) {
@@ -128,14 +210,32 @@ void *testEmptyKernelLaunchInNullStream(void *tid)
         hipEventElapsedTime(&results[i], start, stop);
     }
     print_timing("Timing around single dispatch latency Null Stream Thread-"+std::to_string(*threadId), results);
-    check(hipEventDestroy(start));
-    check(hipEventDestroy(stop));
+
+    /*********************************************************************************/
+    /* Batch dispatch execution latency using HIP events:                            */
+    /* Measures average time to start & finish executing each dispatch in a batch    */ 
+    /*********************************************************************************/
+
+    for (auto i = 0; i < TOTAL_RUN_COUNT; ++i) {
+        hipEventRecord(start, 0);
+        for (int j = 0; j < BATCH_SIZE; j++) {
+            hipLaunchKernelGGL((EmptyKernel), dim3(NUM_GROUPS), dim3(GROUP_SIZE), 0, 0);
+        }
+        hipEventRecord(stop, 0);
+        hipEventSynchronize(stop);
+        hipEventElapsedTime(&results[i], start, stop);
+    }
+    print_timing("Batch dispatch latency Null Stream Thread-"+ std::to_string(*threadId), results, BATCH_SIZE);
+
+    hipEventDestroy(start);
+    hipEventDestroy(stop);
+    hipModuleUnload(module);
     return NULL;
 }
 
 int main()
 {
-    const int num_threads = 4;
+    const int num_threads = NUM_THREADS;
 
     pthread_t threads[num_threads];
     int index[]= {1,2,3,4,5,6,7,8};
